@@ -1,0 +1,24 @@
+{
+  "name": "gitpod-ssh-tool",
+  "version": "1.0.0",
+  "description": "Interactive SSH tool for Gitpod projects",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "gitpod-ssh": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "gitpod",
+    "ssh",
+    "cli"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "inquirer": "^9.2.12"
+  }
+}
+
