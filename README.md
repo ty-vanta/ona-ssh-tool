@@ -4,7 +4,9 @@ An interactive SSH tool for Gitpod environments, inspired by GitHub Codespaces `
 
 ## Features
 
-- Lists all your running Gitpod environments interactively
+- Lists all your Gitpod environments interactively 
+- Shows visual status indicator (🟢 running, ⚪ stopped)
+- Automatically starts stopped environments before connecting
 - Allows you to select an environment from the list
 - Automatically SSHs into the selected environment
 
@@ -50,10 +52,11 @@ gitpod-ssh
 
 ## How It Works
 
-1. Runs `gitpod environment list` to fetch all your running environments
+1. Runs `gitpod environment list` to fetch all your environments (running and stopped)
 2. Parses the output to extract environment information
-3. Presents an interactive selection menu
-4. SSHs into the selected environment using the format: `ssh <environment-id>.gitpod.environment`
+3. Presents an interactive selection menu with status indicators
+4. If the selected environment is stopped, automatically starts it
+5. SSHs into the selected environment using the format: `ssh <environment-id>.gitpod.environment`
 
 ## Example Output
 

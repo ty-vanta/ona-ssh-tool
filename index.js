@@ -32,11 +32,6 @@ function parseGitpodEnvironments(output) {
     const classId = parts[3];
     const phase = parts[4];
     
-    // Only include running environments
-    if (phase.toLowerCase() !== 'running') {
-      return null;
-    }
-    
     // Extract repo name from URL for display
     const repoMatch = repository.match(/\/([^\/]+)\.git$/);
     const repoName = repoMatch ? repoMatch[1] : repository;
@@ -76,13 +71,34 @@ async function getGitpodEnvironments() {
 }
 
 /**
+ * Start a Gitpod environment and wait for it to be running
+ * @param {string} environmentId - The ID of the Gitpod environment
+ * @returns {Promise<void>}
+ */
+async function startEnvironment(environmentId) {
+  console.log(`\nStarting environment ${environmentId}...`);
+  
+  try {
+    const { stdout, stderr } = await execAsync(`gitpod environment start ${environmentId}`);
+    
+    if (stderr && stderr.includes('error')) {
+      throw new Error(`Failed to start environment: ${stderr}`);
+    }
+    
+    console.log('Environment started successfully!\n');
+  } catch (error) {
+    throw new Error(`Failed to start environment: ${error.message}`);
+  }
+}
+
+/**
  * SSH into a Gitpod environment
  * @param {string} environmentId - The ID of the Gitpod environment
  */
 function sshIntoGitpod(environmentId) {
   const sshCommand = `ssh ${environmentId}.gitpod.environment`;
   
-  console.log(`\nConnecting to: ${sshCommand}\n`);
+  console.log(`Connecting to: ${sshCommand}\n`);
   
   // Use spawn with stdio inheritance to allow interactive SSH session
   const sshProcess = spawn('ssh', [`${environmentId}.gitpod.environment`], {
@@ -109,16 +125,20 @@ async function main() {
     const environments = await getGitpodEnvironments();
     
     if (environments.length === 0) {
-      console.log('No running Gitpod environments found.');
+      console.log('No Gitpod environments found.');
       process.exit(0);
     }
     
-    // Create choices for inquirer
-    const choices = environments.map(env => ({
-      name: `${env.displayName} (${env.repository}) - ${env.id}`,
-      value: env.id,
-      short: env.repoName
-    }));
+    // Create choices for inquirer with status indicator
+    const choices = environments.map(env => {
+      const statusEmoji = env.phase.toLowerCase() === 'running' ? '🟢' : '⚪';
+      return {
+        name: `${statusEmoji} ${env.displayName} (${env.repository}) - ${env.id}`,
+        value: env.id,
+        short: env.repoName,
+        phase: env.phase
+      };
+    });
     
     // Prompt user to select an environment
     const answers = await inquirer.prompt([
@@ -130,6 +150,14 @@ async function main() {
         pageSize: 10
       }
     ]);
+    
+    // Find the selected environment to check its phase
+    const selectedEnv = environments.find(env => env.id === answers.environmentId);
+    
+    // Start the environment if it's not running
+    if (selectedEnv && selectedEnv.phase.toLowerCase() !== 'running') {
+      await startEnvironment(answers.environmentId);
+    }
     
     // SSH into the selected environment
     sshIntoGitpod(answers.environmentId);
