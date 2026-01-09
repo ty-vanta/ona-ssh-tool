@@ -67,7 +67,7 @@ Open VS Code or Cursor to a Gitpod environment.
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-e, --editor <editor>` | Editor to use (`code` or `cursor`) | Auto-detect |
-| `-p, --path <path>` | Remote workspace path | `/workspace` |
+| `-p, --path <path>` | Remote workspace path | `/workspaces/obsidian` |
 
 ### Help
 

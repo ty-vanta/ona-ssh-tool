@@ -9,7 +9,7 @@ const execAsync = promisify(exec);
 
 // Constants
 const SSH_HOST_SUFFIX = 'gitpod.environment';
-const DEFAULT_WORKSPACE_PATH = '/workspace';
+const DEFAULT_WORKSPACE_PATH = '/workspaces/obsidian';
 
 /**
  * @typedef {Object} GitpodEnvironment
