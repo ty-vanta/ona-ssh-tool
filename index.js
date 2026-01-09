@@ -3,13 +3,29 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import inquirer from 'inquirer';
+import { Command } from 'commander';
 
 const execAsync = promisify(exec);
+
+// Constants
+const SSH_HOST_SUFFIX = 'gitpod.environment';
+const DEFAULT_WORKSPACE_PATH = '/workspace';
+
+/**
+ * @typedef {Object} GitpodEnvironment
+ * @property {string} id
+ * @property {string} repository
+ * @property {string} branch
+ * @property {string} classId
+ * @property {string} phase
+ * @property {string} repoName
+ * @property {string} displayName
+ */
 
 /**
  * Parse the output from `gitpod environment list` command
  * @param {string} output - The raw output from gitpod environment list
- * @returns {Array} Array of parsed environment objects
+ * @returns {GitpodEnvironment[]} Array of parsed environment objects
  */
 function parseGitpodEnvironments(output) {
   const lines = output.trim().split('\n');
@@ -51,7 +67,7 @@ function parseGitpodEnvironments(output) {
 
 /**
  * Fetch list of Gitpod environments
- * @returns {Promise<Array>} Array of environment objects
+ * @returns {Promise<GitpodEnvironment[]>} Array of environment objects
  */
 async function getGitpodEnvironments() {
   try {
@@ -92,16 +108,65 @@ async function startEnvironment(environmentId) {
 }
 
 /**
+ * Get SSH host string for an environment
+ * @param {string} environmentId - The environment ID
+ * @returns {string} The SSH host string
+ */
+function getSshHost(environmentId) {
+  return `${environmentId}.${SSH_HOST_SUFFIX}`;
+}
+
+/**
+ * Prompt user to select an environment
+ * @param {GitpodEnvironment[]} environments - List of environments
+ * @returns {Promise<GitpodEnvironment>} The selected environment
+ */
+async function promptForEnvironment(environments) {
+  const choices = environments.map(env => {
+    const statusEmoji = env.phase.toLowerCase() === 'running' ? '🟢' : '⚪';
+    return {
+      name: `${statusEmoji} ${env.displayName} (${env.repository}) - ${env.id}`,
+      value: env.id,
+      short: env.repoName,
+      phase: env.phase
+    };
+  });
+  
+  const answers = await inquirer.prompt([
+    {
+      type: 'list',
+      name: 'environmentId',
+      message: 'Choose environment:',
+      choices: choices,
+      pageSize: 10
+    }
+  ]);
+  
+  return environments.find(env => env.id === answers.environmentId);
+}
+
+/**
+ * Ensure environment is running, starting it if necessary
+ * @param {GitpodEnvironment} environment - The environment
+ * @returns {Promise<void>}
+ */
+async function ensureEnvironmentRunning(environment) {
+  if (environment.phase.toLowerCase() !== 'running') {
+    await startEnvironment(environment.id);
+  }
+}
+
+/**
  * SSH into a Gitpod environment
  * @param {string} environmentId - The ID of the Gitpod environment
  */
 function sshIntoGitpod(environmentId) {
-  const sshCommand = `ssh ${environmentId}.gitpod.environment`;
+  const sshHost = getSshHost(environmentId);
   
-  console.log(`Connecting to: ${sshCommand}\n`);
+  console.log(`Connecting to: ssh ${sshHost}\n`);
   
   // Use spawn with stdio inheritance to allow interactive SSH session
-  const sshProcess = spawn('ssh', [`${environmentId}.gitpod.environment`], {
+  const sshProcess = spawn('ssh', [sshHost], {
     stdio: 'inherit'
   });
   
@@ -116,9 +181,94 @@ function sshIntoGitpod(environmentId) {
 }
 
 /**
- * Main function
+ * Check if an editor command is available
+ * @param {string} command - The command to check
+ * @returns {Promise<boolean>}
  */
-async function main() {
+async function isCommandAvailable(command) {
+  try {
+    await execAsync(`which ${command}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect which editor the user has available
+ * @returns {Promise<'cursor' | 'code' | null>}
+ */
+async function detectEditor() {
+  // Prefer Cursor if available
+  if (await isCommandAvailable('cursor')) {
+    return 'cursor';
+  }
+  if (await isCommandAvailable('code')) {
+    return 'code';
+  }
+  return null;
+}
+
+/**
+ * Open VS Code or Cursor to a remote environment
+ * @param {string} environmentId - The environment ID
+ * @param {Object} options - Options
+ * @param {string} [options.editor] - Editor to use ('code' or 'cursor')
+ * @param {string} [options.workspacePath] - Remote workspace path
+ */
+async function openInEditor(environmentId, options = {}) {
+  const sshHost = getSshHost(environmentId);
+  
+  // Determine which editor to use
+  let editorCommand = options.editor;
+  
+  if (!editorCommand) {
+    editorCommand = await detectEditor();
+    if (!editorCommand) {
+      throw new Error(
+        'Neither VS Code nor Cursor CLI found. Please install one of them:\n' +
+        '  - VS Code: Install and run "Shell Command: Install \'code\' command in PATH"\n' +
+        '  - Cursor: Install and run "Shell Command: Install \'cursor\' command in PATH"'
+      );
+    }
+  }
+  
+  // Verify the requested editor is available
+  if (!(await isCommandAvailable(editorCommand))) {
+    throw new Error(
+      `${editorCommand} command not found. Please ensure it's installed and in your PATH.\n` +
+      `Run "Shell Command: Install '${editorCommand}' command in PATH" from the command palette.`
+    );
+  }
+  
+  const workspacePath = options.workspacePath || DEFAULT_WORKSPACE_PATH;
+  const editorDisplayName = editorCommand === 'cursor' ? 'Cursor' : 'VS Code';
+  
+  console.log(`Opening ${editorDisplayName} to ${sshHost}:${workspacePath}...`);
+  
+  // Use the --remote flag with ssh-remote+ prefix
+  // Format: editor --remote ssh-remote+<host> <path>
+  const remoteArg = `ssh-remote+${sshHost}`;
+  
+  try {
+    // Spawn the editor process detached so it doesn't block the terminal
+    const editorProcess = spawn(editorCommand, ['--remote', remoteArg, workspacePath], {
+      detached: true,
+      stdio: 'ignore'
+    });
+    
+    editorProcess.unref();
+    
+    console.log(`${editorDisplayName} is opening. You can close this terminal.`);
+  } catch (error) {
+    throw new Error(`Failed to open ${editorDisplayName}: ${error.message}`);
+  }
+}
+
+/**
+ * Handle the SSH command
+ */
+async function handleSshCommand() {
   try {
     console.log('Fetching Gitpod environments...\n');
     
@@ -129,38 +279,9 @@ async function main() {
       process.exit(0);
     }
     
-    // Create choices for inquirer with status indicator
-    const choices = environments.map(env => {
-      const statusEmoji = env.phase.toLowerCase() === 'running' ? '🟢' : '⚪';
-      return {
-        name: `${statusEmoji} ${env.displayName} (${env.repository}) - ${env.id}`,
-        value: env.id,
-        short: env.repoName,
-        phase: env.phase
-      };
-    });
-    
-    // Prompt user to select an environment
-    const answers = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'environmentId',
-        message: 'Choose environment:',
-        choices: choices,
-        pageSize: 10
-      }
-    ]);
-    
-    // Find the selected environment to check its phase
-    const selectedEnv = environments.find(env => env.id === answers.environmentId);
-    
-    // Start the environment if it's not running
-    if (selectedEnv && selectedEnv.phase.toLowerCase() !== 'running') {
-      await startEnvironment(answers.environmentId);
-    }
-    
-    // SSH into the selected environment
-    sshIntoGitpod(answers.environmentId);
+    const selectedEnv = await promptForEnvironment(environments);
+    await ensureEnvironmentRunning(selectedEnv);
+    sshIntoGitpod(selectedEnv.id);
     
   } catch (error) {
     console.error(`Error: ${error.message}`);
@@ -168,5 +289,57 @@ async function main() {
   }
 }
 
-main();
+/**
+ * Handle the code command
+ * @param {Object} options - Command options
+ */
+async function handleCodeCommand(options) {
+  try {
+    console.log('Fetching Gitpod environments...\n');
+    
+    const environments = await getGitpodEnvironments();
+    
+    if (environments.length === 0) {
+      console.log('No Gitpod environments found.');
+      process.exit(0);
+    }
+    
+    const selectedEnv = await promptForEnvironment(environments);
+    await ensureEnvironmentRunning(selectedEnv);
+    
+    await openInEditor(selectedEnv.id, {
+      editor: options.editor,
+      workspacePath: options.path
+    });
+    
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+}
 
+// CLI Setup
+const program = new Command();
+
+program
+  .name('gitpod-ssh')
+  .description('Interactive tool for connecting to Gitpod environments')
+  .version('1.1.0');
+
+program
+  .command('ssh')
+  .description('SSH into a Gitpod environment')
+  .action(handleSshCommand);
+
+program
+  .command('code')
+  .description('Open VS Code or Cursor to a Gitpod environment')
+  .option('-e, --editor <editor>', 'Editor to use (code or cursor)')
+  .option('-p, --path <path>', 'Remote workspace path', DEFAULT_WORKSPACE_PATH)
+  .action(handleCodeCommand);
+
+// Default to SSH if no command is provided (maintain backwards compatibility)
+program
+  .action(handleSshCommand);
+
+program.parse();
